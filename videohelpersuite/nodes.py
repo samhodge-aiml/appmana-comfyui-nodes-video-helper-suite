@@ -2,33 +2,49 @@ import os
 import sys
 import json
 import subprocess
+from importlib import resources
+
 import numpy as np
 import re
 import datetime
-from typing import List
-import torch
+from typing import Iterator
 from PIL import Image, ExifTags
 from PIL.PngImagePlugin import PngInfo
-from pathlib import Path
 from string import Template
 import itertools
 
-import folder_paths
+from comfy.cmd import folder_paths
 from .logger import logger
 from .image_latent_nodes import *
 from .load_video_nodes import LoadVideoUpload, LoadVideoPath
 from .load_images_nodes import LoadImagesFromDirectoryUpload, LoadImagesFromDirectoryPath
 from .batched_nodes import VAEEncodeBatched, VAEDecodeBatched
 from .utils import ffmpeg_path, get_audio, hash_path, validate_path, requeue_workflow, gifski_path, calculate_file_hash, strip_path
+from .server import *
+
 from comfy.utils import ProgressBar
 
-folder_paths.folder_names_and_paths["VHS_video_formats"] = (
-    [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "video_formats"),
-    ],
-    [".json"]
-)
+VHS_VIDEO_FORMATS_FOLDER_NAME = "VHS_video_formats"
+folder_paths.add_model_folder_path(VHS_VIDEO_FORMATS_FOLDER_NAME, extensions={".json"})
 audio_extensions = ['mp3', 'mp4', 'wav', 'ogg']
+
+
+def get_video_format_files() -> Iterator[str]:
+    for filename in folder_paths.get_filename_list(VHS_VIDEO_FORMATS_FOLDER_NAME):
+        yield filename
+    for traversable in resources.files(f"{__package__}.video_formats").iterdir():
+        if traversable.is_file() and traversable.name.endswith(".json"):
+            yield traversable.name
+
+
+def get_full_path(format_name_without_json_ext: str) -> str:
+    candidate = folder_paths.get_full_path(VHS_VIDEO_FORMATS_FOLDER_NAME, format_name_without_json_ext + ".json")
+    if candidate is not None:
+        return candidate
+
+    for traversable in resources.files(f"{__package__}.video_formats").iterdir():
+        if traversable.is_file() and traversable.name.endswith(".json") and traversable.name[:-len(".json")] == format_name_without_json_ext:
+            return os.path.abspath(str(traversable))
 
 def gen_format_widgets(video_format):
     for k in video_format:
@@ -46,9 +62,9 @@ def gen_format_widgets(video_format):
 
 def get_video_formats():
     formats = []
-    for format_name in folder_paths.get_filename_list("VHS_video_formats"):
+    for format_name in get_video_format_files():
         format_name = format_name[:-5]
-        video_format_path = folder_paths.get_full_path("VHS_video_formats", format_name + ".json")
+        video_format_path = get_full_path(format_name + ".json")
         with open(video_format_path, 'r') as stream:
             video_format = json.load(stream)
         if "gifski_pass" in video_format and gifski_path is None:
@@ -62,7 +78,7 @@ def get_video_formats():
     return formats
 
 def get_format_widget_defaults(format_name):
-    video_format_path = folder_paths.get_full_path("VHS_video_formats", format_name + ".json")
+    video_format_path = get_full_path(format_name)
     with open(video_format_path, 'r') as stream:
         video_format = json.load(stream)
     results = {}
@@ -80,7 +96,7 @@ def get_format_widget_defaults(format_name):
 
 
 def apply_format_widgets(format_name, kwargs):
-    video_format_path = folder_paths.get_full_path("VHS_video_formats", format_name + ".json")
+    video_format_path = get_full_path(format_name + ".json")
     with open(video_format_path, 'r') as stream:
         video_format = json.load(stream)
     for w in gen_format_widgets(video_format):

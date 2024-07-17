@@ -2,8 +2,8 @@
 name = "comfyui-videohelpersuite"
 description = "Nodes related to video workflows"
 version = "1.3.1"
-license = "LICENSE"
-dependencies = ["opencv-python", "imageio-ffmpeg"]
+license = { file = "LICENSE" }
+dependencies = []
 
 [project.urls]
 Repository = "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"
@@ -13,3 +13,18 @@ Repository = "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"
 PublisherId = "kosinkadink"
 DisplayName = "ComfyUI-VideoHelperSuite"
 Icon = ""
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["comfyui_video_helper_suite"]
+package-dir = { "comfyui_video_helper_suite" = "." }
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[project.entry-points."comfyui.custom_nodes"]
+comfyui_video_helper_suite = "comfyui_video_helper_suite.videohelpersuite.nodes"
+comfyui_video_helper_suite_web_directory = "comfyui_video_helper_suite"

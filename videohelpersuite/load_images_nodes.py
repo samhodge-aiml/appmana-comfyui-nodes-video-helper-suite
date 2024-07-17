@@ -5,7 +5,7 @@ import torch
 from PIL import Image, ImageOps
 import itertools
 
-import folder_paths
+from comfy.cmd import folder_paths
 from comfy.k_diffusion.utils import FolderOfImages
 from comfy.utils import common_upscale, ProgressBar
 from .logger import logger

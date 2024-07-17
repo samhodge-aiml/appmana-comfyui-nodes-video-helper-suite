@@ -1,21 +1,26 @@
 import hashlib
 import os
-from typing import Iterable
+import re
 import shutil
 import subprocess
-import re
+import sys
+import warnings
 from collections.abc import Mapping
+from typing import Iterable
 from typing import Union
+
 import torch
 from torch import Tensor
 
-import server
+from comfy.cmd import server
+from comfy.execution_context import current_execution_context
 from .logger import logger
 
-BIGMIN = -(2**53-1)
-BIGMAX = (2**53-1)
+BIGMIN = -(2 ** 53 - 1)
+BIGMAX = (2 ** 53 - 1)
 
 DIMMAX = 8192
+
 
 def ffmpeg_suitability(path):
     try:
@@ -24,16 +29,16 @@ def ffmpeg_suitability(path):
     except:
         return 0
     score = 0
-    #rough layout of the importance of various features
-    simple_criterion = [("libvpx", 20),("264",10), ("265",3),
-                        ("svtav1",5),("libopus", 1)]
+    # rough layout of the importance of various features
+    simple_criterion = [("libvpx", 20), ("264", 10), ("265", 3),
+                        ("svtav1", 5), ("libopus", 1)]
     for criterion in simple_criterion:
         if version.find(criterion[0]) >= 0:
             score += criterion[1]
-    #obtain rough compile year from copyright information
+    # obtain rough compile year from copyright information
     copyright_index = version.find('2000-2')
     if copyright_index >= 0:
-        copyright_year = version[copyright_index+6:copyright_index+9]
+        copyright_year = version[copyright_index + 6:copyright_index + 9]
         if copyright_year.isnumeric():
             score += int(copyright_year)
     return score
@@ -45,6 +50,7 @@ else:
     ffmpeg_paths = []
     try:
         from imageio_ffmpeg import get_ffmpeg_exe
+
         imageio_ffmpeg_path = get_ffmpeg_exe()
         ffmpeg_paths.append(imageio_ffmpeg_path)
     except:
@@ -65,8 +71,8 @@ else:
             logger.error("No valid ffmpeg found.")
             ffmpeg_path = None
         elif len(ffmpeg_paths) == 1:
-            #Evaluation of suitability isn't required, can take sole option
-            #to reduce startup time
+            # Evaluation of suitability isn't required, can take sole option
+            # to reduce startup time
             ffmpeg_path = ffmpeg_paths[0]
         else:
             ffmpeg_path = max(ffmpeg_paths, key=ffmpeg_suitability)
@@ -76,6 +82,7 @@ if gifski_path is None:
     if gifski_path is None:
         gifski_path = shutil.which("gifski")
 
+
 def is_safe_path(path):
     if "VHS_STRICT_PATHS" not in os.environ:
         return True
@@ -83,11 +90,12 @@ def is_safe_path(path):
     try:
         common_path = os.path.commonpath([basedir, path])
     except:
-        #Different drive on windows
+        # Different drive on windows
         return False
     return common_path == basedir
 
-def get_sorted_dir_files_from_directory(directory: str, skip_first_images: int=0, select_every_nth: int=1, extensions: Iterable=None):
+
+def get_sorted_dir_files_from_directory(directory: str, skip_first_images: int = 0, select_every_nth: int = 1, extensions: Iterable = None):
     directory = strip_path(directory)
     dir_files = os.listdir(directory)
     dir_files = sorted(dir_files)
@@ -110,52 +118,73 @@ def get_sorted_dir_files_from_directory(directory: str, skip_first_images: int=0
 
 # modified from https://stackoverflow.com/questions/22058048/hashing-a-file-in-python
 def calculate_file_hash(filename: str, hash_every_n: int = 1):
-    #Larger video files were taking >.5 seconds to hash even when cached,
-    #so instead the modified time from the filesystem is used as a hash
+    # Larger video files were taking >.5 seconds to hash even when cached,
+    # so instead the modified time from the filesystem is used as a hash
     h = hashlib.sha256()
     h.update(filename.encode())
     h.update(str(os.path.getmtime(filename)).encode())
     return h.hexdigest()
 
-prompt_queue = server.PromptServer.instance.prompt_queue
+
+def _get_prompt_queue():
+    warnings.warn(
+        "",
+        DeprecationWarning,
+        stacklevel=2
+    )
+    if hasattr(current_execution_context().server, "prompt_queue"):
+        prompt_queue = getattr(current_execution_context().server, "prompt_queue")
+        if prompt_queue is not None:
+            return prompt_queue
+    raise ValueError("Cannot access the prompt queue in a distributed context")
+
+
+setattr(sys.modules[__name__], 'prompt_queue', property(_get_prompt_queue))
+
+
 def requeue_workflow_unchecked():
     """Requeues the current workflow without checking for multiple requeues"""
-    currently_running = prompt_queue.currently_running
+    currently_running = _get_prompt_queue().currently_running
     (_, _, prompt, extra_data, outputs_to_execute) = next(iter(currently_running.values()))
 
-    #Ensure batch_managers are marked stale
+    # Ensure batch_managers are marked stale
     prompt = prompt.copy()
     for uid in prompt:
         if prompt[uid]['class_type'] == 'VHS_BatchManager':
-            prompt[uid]['inputs']['requeue'] = prompt[uid]['inputs'].get('requeue',0)+1
+            prompt[uid]['inputs']['requeue'] = prompt[uid]['inputs'].get('requeue', 0) + 1
 
-    #execution.py has guards for concurrency, but server doesn't.
-    #TODO: Check that this won't be an issue
-    number = -server.PromptServer.instance.number
-    server.PromptServer.instance.number += 1
+    # execution.py has guards for concurrency, but server doesn't.
+    # TODO: Check that this won't be an issue
+    server_prompt_server_instance = current_execution_context().server
+    number = -server_prompt_server_instance.number
+    server_prompt_server_instance.number += 1
     prompt_id = str(server.uuid.uuid4())
-    prompt_queue.put((number, prompt_id, prompt, extra_data, outputs_to_execute))
+    _get_prompt_queue().put((number, prompt_id, prompt, extra_data, outputs_to_execute))
+
 
 requeue_guard = [None, 0, 0, {}]
-def requeue_workflow(requeue_required=(-1,True)):
-    assert(len(prompt_queue.currently_running) == 1)
+
+
+def requeue_workflow(requeue_required=(-1, True)):
+    assert (len(_get_prompt_queue().currently_running) == 1)
     global requeue_guard
-    (run_number, _, prompt, _, _) = next(iter(prompt_queue.currently_running.values()))
+    (run_number, _, prompt, _, _) = next(iter(_get_prompt_queue().currently_running.values()))
     if requeue_guard[0] != run_number:
-        #Calculate a count of how many outputs are managed by a batch manager
-        managed_outputs=0
+        # Calculate a count of how many outputs are managed by a batch manager
+        managed_outputs = 0
         for bm_uid in prompt:
             if prompt[bm_uid]['class_type'] == 'VHS_BatchManager':
                 for output_uid in prompt:
                     if prompt[output_uid]['class_type'] in ["VHS_VideoCombine"]:
                         for inp in prompt[output_uid]['inputs'].values():
                             if inp == [bm_uid, 0]:
-                                managed_outputs+=1
+                                managed_outputs += 1
         requeue_guard = [run_number, 0, managed_outputs, {}]
-    requeue_guard[1] = requeue_guard[1]+1
+    requeue_guard[1] = requeue_guard[1] + 1
     requeue_guard[3][requeue_required[0]] = requeue_required[1]
     if requeue_guard[1] == requeue_guard[2] and max(requeue_guard[3].values()):
         requeue_workflow_unchecked()
+
 
 def get_audio(file, start_time=0, duration=0):
     args = [ffmpeg_path, "-i", file]
@@ -164,51 +193,59 @@ def get_audio(file, start_time=0, duration=0):
     if duration > 0:
         args += ["-t", str(duration)]
     try:
-        #TODO: scan for sample rate and maintain
-        res =  subprocess.run(args + ["-f", "f32le", "-"],
-                              capture_output=True, check=True)
+        # TODO: scan for sample rate and maintain
+        res = subprocess.run(args + ["-f", "f32le", "-"],
+                             capture_output=True, check=True)
         audio = torch.frombuffer(bytearray(res.stdout), dtype=torch.float32)
-        match = re.search(', (\\d+) Hz, (\\w+), ',res.stderr.decode('utf-8'))
+        match = re.search(', (\\d+) Hz, (\\w+), ', res.stderr.decode('utf-8'))
     except subprocess.CalledProcessError as e:
         raise Exception(f"VHS failed to extract audio from {file}:\n" \
-                + e.stderr.decode("utf-8"))
+                        + e.stderr.decode("utf-8"))
     if match:
         ar = int(match.group(1))
-        #NOTE: Just throwing an error for other channel types right now
-        #Will deal with issues if they come
+        # NOTE: Just throwing an error for other channel types right now
+        # Will deal with issues if they come
         ac = {"mono": 1, "stereo": 2}[match.group(2)]
     else:
         ar = 44100
         ac = 2
-    audio = audio.reshape((-1,ac)).transpose(0,1).unsqueeze(0)
+    audio = audio.reshape((-1, ac)).transpose(0, 1).unsqueeze(0)
     return {'waveform': audio, 'sample_rate': ar}
+
 
 class LazyAudioMap(Mapping):
     def __init__(self, file, start_time, duration):
         self.file = file
-        self.start_time=start_time
-        self.duration=duration
-        self._dict=None
+        self.start_time = start_time
+        self.duration = duration
+        self._dict = None
+
     def __getitem__(self, key):
         if self._dict is None:
             self._dict = get_audio(self.file, self.start_time, self.duration)
         return self._dict[key]
+
     def __iter__(self):
         if self._dict is None:
             self._dict = get_audio(self.file, self.start_time, self.duration)
         return iter(self._dict)
+
     def __len__(self):
         if self._dict is None:
             self._dict = get_audio(self.file, self.start_time, self.duration)
         return len(self._dict)
+
+
 def lazy_get_audio(file, start_time=0, duration=0):
     return LazyAudioMap(file, start_time, duration)
+
 
 def is_url(url):
     return url.split("://")[0] in ["http", "https"]
 
+
 def validate_sequence(path):
-    #Check if path is a valid ffmpeg sequence that points to at least one file
+    # Check if path is a valid ffmpeg sequence that points to at least one file
     (path, file) = os.path.split(path)
     if not os.path.isdir(path):
         return False
@@ -226,17 +263,20 @@ def validate_sequence(path):
             return True
     return False
 
+
 def strip_path(path):
-    #This leaves whitespace inside quotes and only a single "
-    #thus ' ""test"' -> '"test'
-    #consider path.strip(string.whitespace+"\"")
-    #or weightier re.fullmatch("[\\s\"]*(.+?)[\\s\"]*", path).group(1)
+    # This leaves whitespace inside quotes and only a single "
+    # thus ' ""test"' -> '"test'
+    # consider path.strip(string.whitespace+"\"")
+    # or weightier re.fullmatch("[\\s\"]*(.+?)[\\s\"]*", path).group(1)
     path = path.strip()
     if path.startswith("\""):
         path = path[1:]
     if path.endswith("\""):
         path = path[:-1]
     return path
+
+
 def hash_path(path):
     if path is None:
         return "input"
@@ -249,7 +289,7 @@ def validate_path(path, allow_none=False, allow_url=True):
     if path is None:
         return allow_none
     if is_url(path):
-        #Probably not feasible to check if url resolves here
+        # Probably not feasible to check if url resolves here
         if not allow_url:
             return "URLs are unsupported for this path"
         return is_safe_path(path)
@@ -258,33 +298,33 @@ def validate_path(path, allow_none=False, allow_url=True):
     return is_safe_path(path)
 
 
-def validate_index(index: int, length: int=0, is_range: bool=False, allow_negative=False, allow_missing=False) -> int:
+def validate_index(index: int, length: int = 0, is_range: bool = False, allow_negative=False, allow_missing=False) -> int:
     # if part of range, do nothing
     if is_range:
         return index
     # otherwise, validate index
     # validate not out of range - only when latent_count is passed in
-    if length > 0 and index > length-1 and not allow_missing:
+    if length > 0 and index > length - 1 and not allow_missing:
         raise IndexError(f"Index '{index}' out of range for {length} item(s).")
     # if negative, validate not out of range
     if index < 0:
         if not allow_negative:
             raise IndexError(f"Negative indeces not allowed, but was '{index}'.")
-        conv_index = length+index
+        conv_index = length + index
         if conv_index < 0 and not allow_missing:
             raise IndexError(f"Index '{index}', converted to '{conv_index}' out of range for {length} item(s).")
         index = conv_index
     return index
 
 
-def convert_to_index_int(raw_index: str, length: int=0, is_range: bool=False, allow_negative=False, allow_missing=False) -> int:
+def convert_to_index_int(raw_index: str, length: int = 0, is_range: bool = False, allow_negative=False, allow_missing=False) -> int:
     try:
         return validate_index(int(raw_index), length=length, is_range=is_range, allow_negative=allow_negative, allow_missing=allow_missing)
     except ValueError as e:
         raise ValueError(f"Index '{raw_index}' must be an integer.", e)
 
 
-def convert_str_to_indexes(indexes_str: str, length: int=0, allow_missing=False) -> list[int]:
+def convert_str_to_indexes(indexes_str: str, length: int = 0, allow_missing=False) -> list[int]:
     if not indexes_str:
         return []
     int_indexes = list(range(0, length))
