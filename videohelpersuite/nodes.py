@@ -1,28 +1,24 @@
-import os
-import sys
+import datetime
+import itertools
 import json
-import subprocess
+import re
+import sys
 from importlib import resources
+from string import Template
+from typing import Iterator
 
 import numpy as np
-import re
-import datetime
-from typing import Iterator
 from PIL import Image, ExifTags
 from PIL.PngImagePlugin import PngInfo
-from string import Template
-import itertools
-
-from comfy.cmd import folder_paths
-from .logger import logger
-from .image_latent_nodes import *
-from .load_video_nodes import LoadVideoUpload, LoadVideoPath
-from .load_images_nodes import LoadImagesFromDirectoryUpload, LoadImagesFromDirectoryPath
-from .batched_nodes import VAEEncodeBatched, VAEDecodeBatched
-from .utils import ffmpeg_path, get_audio, hash_path, validate_path, requeue_workflow, gifski_path, calculate_file_hash, strip_path
-from .server import *
 
 from comfy.utils import ProgressBar
+from .batched_nodes import VAEEncodeBatched, VAEDecodeBatched
+from .image_latent_nodes import *
+from .load_images_nodes import LoadImagesFromDirectoryUpload, LoadImagesFromDirectoryPath
+from .load_video_nodes import LoadVideoUpload, LoadVideoPath
+from .logger import logger
+from .server import *
+from .utils import get_audio, hash_path, validate_path, requeue_workflow, gifski_path
 
 VHS_VIDEO_FORMATS_FOLDER_NAME = "VHS_video_formats"
 folder_paths.add_model_folder_path(VHS_VIDEO_FORMATS_FOLDER_NAME, extensions={".json"})
@@ -38,13 +34,15 @@ def get_video_format_files() -> Iterator[str]:
 
 
 def get_full_path(format_name_without_json_ext: str) -> str:
+    if format_name_without_json_ext.endswith(".json"):
+        format_name_without_json_ext = format_name_without_json_ext[:-len(".json")]
     candidate = folder_paths.get_full_path(VHS_VIDEO_FORMATS_FOLDER_NAME, format_name_without_json_ext + ".json")
     if candidate is not None:
         return candidate
-
     for traversable in resources.files(f"{__package__}.video_formats").iterdir():
         if traversable.is_file() and traversable.name.endswith(".json") and traversable.name[:-len(".json")] == format_name_without_json_ext:
             return os.path.abspath(str(traversable))
+    raise FileNotFoundError(format_name_without_json_ext)
 
 def gen_format_widgets(video_format):
     for k in video_format:
@@ -635,7 +633,7 @@ class LoadAudioUpload:
         audio_file = folder_paths.get_annotated_filepath(strip_path(kwargs['audio']))
         if audio_file is None or validate_path(audio_file) != True:
             raise Exception("audio_file is not a valid path: " + audio_file)
-        
+
         return (get_audio(audio_file, start_time, duration),)
 
     @classmethod
@@ -838,7 +836,7 @@ class VideoInfo:
 
     def get_video_info(self, video_info):
         keys = ["fps", "frame_count", "duration", "width", "height"]
-        
+
         source_info = []
         loaded_info = []
 
@@ -872,7 +870,7 @@ class VideoInfoSource:
 
     def get_video_info(self, video_info):
         keys = ["fps", "frame_count", "duration", "width", "height"]
-        
+
         source_info = []
 
         for key in keys:
@@ -904,7 +902,7 @@ class VideoInfoLoaded:
 
     def get_video_info(self, video_info):
         keys = ["fps", "frame_count", "duration", "width", "height"]
-        
+
         loaded_info = []
 
         for key in keys:
