@@ -56,7 +56,7 @@ def images_generator(directory: str, image_load_cap: int = 0, skip_first_images:
     size = max(sizes.items(), key=lambda x: x[1])[0]
     yield size[0], size[1], has_alpha
     if meta_batch is not None:
-        yield min(image_load_cap, len(dir_files))
+        yield min(image_load_cap, len(dir_files)) or len(dir_files)
 
     iformat = "RGBA" if has_alpha else "RGB"
     def load_image(file_path):
@@ -167,7 +167,7 @@ class LoadImagesFromDirectoryPath:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "directory": ("STRING", {"default": "X://path/to/images", "vhs_path_extensions": []}),
+                "directory": ("STRING", {"placeholder": "X://path/to/images", "vhs_path_extensions": []}),
             },
             "optional": {
                 "image_load_cap": ("INT", {"default": 0, "min": 0, "max": BIGMAX, "step": 1}),

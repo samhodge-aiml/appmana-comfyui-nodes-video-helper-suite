@@ -8,7 +8,7 @@ function chainCallback(object, property, callback) {
         console.error("Tried to add callback to non-existant object")
         return;
     }
-    if (property in object) {
+    if (property in object && object[property]) {
         const callback_orig = object[property]
         object[property] = function () {
             const r = callback_orig.apply(this, arguments);
@@ -52,6 +52,16 @@ const renameDict  = {VHS_VideoCombine : {save_output : "save_image"}}
 function useKVState(nodeType) {
     chainCallback(nodeType.prototype, "onNodeCreated", function () {
         chainCallback(this, "onConfigure", function(info) {
+            if (this.inputs) {
+                for (let i = 0; i < this.inputs.length; i++) {
+                    let dt = this?.getInputDataType(i)
+                    if (dt && this.inputs[i]?.type != dt && !(dt == "IMAGE" && this.inputs[i].type == "LATENT")) {
+                        this.inputs[i].type = dt
+                        console.warn("input type mismatch for " + this.title + " slot " + i)
+
+                    }
+                }
+            }
             if (!this.widgets) {
                 //Node has no widgets, there is nothing to restore
                 return
@@ -139,6 +149,261 @@ function useKVState(nodeType) {
         });
     })
 }
+var helpDOM;
+if (!app.helpDOM) {
+    helpDOM = document.createElement("div");
+    app.VHSHelp = helpDOM
+}
+function initHelpDOM() {
+    let parentDOM = document.createElement("div");
+    document.body.appendChild(parentDOM)
+    parentDOM.appendChild(helpDOM)
+    helpDOM.className = "litegraph";
+    let scrollbarStyle = document.createElement('style');
+    scrollbarStyle.innerHTML = `
+    <style id="scroll-properties">
+            * {
+                scrollbar-width: 6px;
+                scrollbar-color: #0003  #0000;
+            }
+            ::-webkit-scrollbar {
+                background: transparent;
+                width: 6px;
+            }
+            ::-webkit-scrollbar-thumb {
+                background: #0005;
+                border-radius: 20px
+            }
+            ::-webkit-scrollbar-button {
+                display: none;
+            }
+            .VHS_loopedvideo::-webkit-media-controls-mute-button {
+                display:none;
+            }
+            .VHS_loopedvideo::-webkit-media-controls-fullscreen-button {
+                display:none;
+            }
+        </style>
+    `
+    parentDOM.appendChild(scrollbarStyle)
+    chainCallback(app.canvas, "onDrawForeground", function (ctx, visible_rect){
+        let n = helpDOM.node
+        if (!n || !n?.graph) {
+            parentDOM.style['left'] = '-5000px'
+            return
+        }
+        //draw : function(ctx, node, widgetWidth, widgetY, height) {
+        //update widget position, even if off screen
+        const transform = ctx.getTransform();
+        const scale = app.canvas.ds.scale;//gets the litegraph zoom
+        //calculate coordinates with account for browser zoom
+        const bcr = app.canvas.canvas.getBoundingClientRect()
+        const x = transform.e*scale/transform.a + bcr.x;
+        const y = transform.f*scale/transform.a + bcr.y;
+        //TODO: text reflows at low zoom. investigate alternatives
+        Object.assign(parentDOM.style, {
+            left: (x+(n.pos[0] + n.size[0]+15)*scale) + "px",
+            top: (y+(n.pos[1]-LiteGraph.NODE_TITLE_HEIGHT)*scale) + "px",
+            width: "400px",
+            minHeight: "100px",
+            maxHeight: "600px",
+            overflowY: 'scroll',
+            transformOrigin: '0 0',
+            transform: 'scale(' + scale + ',' + scale +')',
+            fontSize: '18px',
+            backgroundColor: LiteGraph.NODE_DEFAULT_BGCOLOR,
+            boxShadow: '0 0 10px black',
+            borderRadius: '4px',
+            padding: '3px',
+            zIndex: 3,
+            position: "absolute",
+            display: 'inline',
+        });
+    });
+    function setCollapse(el, doCollapse) {
+        if (doCollapse) {
+            el.children[0].children[0].innerHTML = '+'
+            Object.assign(el.children[1].style, {
+                color: '#CCC',
+                overflowX: 'hidden',
+                width: '0px',
+                minWidth: 'calc(100% - 20px)',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+            })
+            for (let child of el.children[1].children) {
+                if (child.style.display != 'none'){
+                    child.origDisplay = child.style.display
+                }
+                child.style.display = 'none'
+            }
+        } else {
+            el.children[0].children[0].innerHTML = '-'
+            Object.assign(el.children[1].style, {
+                color: '',
+                overflowX: '',
+                width: '100%',
+                minWidth: '',
+                textOverflow: '',
+                whiteSpace: '',
+            })
+            for (let child of el.children[1].children) {
+                child.style.display = child.origDisplay
+            }
+        }
+    }
+    helpDOM.collapseOnClick = function() {
+        let doCollapse = this.children[0].innerHTML == '-'
+        setCollapse(this.parentElement, doCollapse)
+    }
+    helpDOM.selectHelp = function(name, value) {
+        //attempt to navigate to name in help
+        function collapseUnlessMatch(items,t) {
+            var match = items.querySelector('[vhs_title="' + t + '"]')
+            if (!match) {
+                for (let i of items.children) {
+                    if (i.innerHTML.slice(0,t.length+5).includes(t)) {
+                        match = i
+                        break
+                    }
+                }
+            }
+            if (!match) {
+                return null
+            }
+            //For longer documentation items with fewer collapsable elements,
+            //scroll to make sure the entirety of the selected item is visible
+            //This has the unfortunate side effect of trying to scroll the main
+            //window if the documentation windows is forcibly offscreen,
+            //but it's easy to simply scroll the main window back and seems to
+            //have no visual side effects
+            match.scrollIntoView(false)
+            window.scrollTo(0,0)
+            for (let i of items.querySelectorAll('.VHS_collapse')) {
+                if (i.contains(match)) {
+                    setCollapse(i, false)
+                } else {
+                    setCollapse(i, true)
+                }
+            }
+            return match
+        }
+        let target = collapseUnlessMatch(helpDOM, name)
+        if (target && value) {
+            collapseUnlessMatch(target, value)
+        }
+    }
+    let titleContext = document.createElement("canvas").getContext("2d")
+    titleContext.font = app.canvas.title_text_font;
+    helpDOM.calculateTitleLength = function(text) {
+        return titleContext.measureText(text).width
+    }
+    helpDOM.addHelp = function(node, nodeType, description) {
+        if (!description) {
+            return
+        }
+        //Pad computed size for the clickable question mark
+        let originalComputeSize = node.computeSize
+        node.computeSize = function() {
+            let size = originalComputeSize.apply(this, arguments)
+            if (!this.title) {
+                return size
+            }
+            let title_width = helpDOM.calculateTitleLength(this.title)
+            size[0] = Math.max(size[0], title_width + LiteGraph.NODE_TITLE_HEIGHT*2)
+            return size
+        }
+
+        node.description = description
+        chainCallback(node, "onDrawForeground", function (ctx) {
+            if (this?.flags?.collapsed) {
+                return
+            }
+            //draw question mark
+            ctx.save()
+            ctx.font = 'bold 20px Arial'
+            ctx.fillText("?", this.size[0]-17, -8)
+            ctx.restore()
+        })
+        chainCallback(node, "onMouseDown", function (e, pos, canvas) {
+            if (this?.flags?.collapsed) {
+                return
+            }
+            //On click would be preferred, but this'll be good enough
+            if (pos[1] < 0 && pos[0] + LiteGraph.NODE_TITLE_HEIGHT > this.size[0]) {
+                //corner question mark clicked
+                if (helpDOM.node == this) {
+                    helpDOM.node = undefined
+                } else {
+                    helpDOM.node = this;
+                    helpDOM.innerHTML = this.description || "no help provided ".repeat(20)
+                    for (let e of helpDOM.querySelectorAll('.VHS_collapse')) {
+                        e.children[0].onclick = helpDOM.collapseOnClick
+                        e.children[0].style.cursor = 'pointer'
+                    }
+                    for (let e of helpDOM.querySelectorAll('.VHS_precollapse')) {
+                        setCollapse(e, true)
+                    }
+                    helpDOM.parentElement.scrollTo(0,0)
+                }
+                return true
+            }
+        })
+        let timeout = null
+        chainCallback(node, "onMouseMove", function (e, pos, canvas) {
+            if (timeout) {
+                clearTimeout(timeout)
+                timeout = null
+            }
+            if (helpDOM.node != this) {
+                return
+            }
+            timeout = setTimeout(() => {
+                let n = this
+                if (pos[0] > 0 && pos[0] < n.size[0]
+                    && pos[1] > 0 && pos[1] < n.size[1]) {
+                    //TODO: provide help specific to element clicked
+                    let inputRows = Math.max(n.inputs?.length || 0, n.outputs?.length || 0)
+                    if (pos[1] < LiteGraph.NODE_SLOT_HEIGHT * inputRows) {
+                        let row = Math.floor((pos[1] - 7) / LiteGraph.NODE_SLOT_HEIGHT)
+                        if (pos[0] < n.size[0]/2) {
+                            if (row < n.inputs.length) {
+                                helpDOM.selectHelp(n.inputs[row].name)
+                            }
+                        } else {
+                            if (row < n.outputs.length) {
+                                helpDOM.selectHelp(n.outputs[row].name)
+                            }
+                        }
+                    } else {
+                        //probably widget, but widgets have variable height.
+                        let basey = LiteGraph.NODE_SLOT_HEIGHT * inputRows + 6
+                        for (let w of n.widgets) {
+                            if (w.y) {
+                                basey = w.y
+                            }
+                            let wheight = LiteGraph.NODE_WIDGET_HEIGHT+4
+                            if (w.computeSize) {
+                                wheight = w.computeSize(n.size[0])[1]
+                            }
+                            if (pos[1] < basey + wheight) {
+                                helpDOM.selectHelp(w.name, w.value)
+                                break
+                            }
+                            basey += wheight
+                        }
+                    }
+                }
+            }, 500)
+        })
+        chainCallback(node, "onMouseLeave", function (e, pos, canvas) {
+            if (timeout) {
+                clearTimeout(timeout)
+                timeout = null
+            }
+        });
+    }
+}
 
 function fitHeight(node) {
     node.setSize([node.size[0], node.computeSize([node.size[0], node.size[1]])[1]])
@@ -166,7 +431,7 @@ async function uploadFile(file) {
         });
 
         if (resp.status === 200) {
-            return resp.status
+            return resp
         } else {
             alert(resp.status + " - " + resp.statusText);
         }
@@ -208,7 +473,6 @@ function applyVHSAudioLinksFix(nodeType, nodeData, audio_slot) {
     })
 }
 function addVAEOutputToggle(nodeType, nodeData) {
-    nodeData.output.pop()
     chainCallback(nodeType.prototype, "onConnectionsChange", function(contype, slot, iscon, linfo) {
         if (contype == LiteGraph.INPUT && slot == 1 && this.inputs[1].type == "VAE") {
             if (iscon && linfo) {
@@ -235,19 +499,8 @@ function addVAEOutputToggle(nodeType, nodeData) {
             }
         }
     });
-    chainCallback(nodeType.prototype, "onNodeCreated", function(contype, slot, iscon, linf) {
-        this.updateLink = function(link) {
-            if (link.origin_slot == 0 && this.outputs[0].type=="LATENT") {
-                return {'origin_id': link.origin_id,
-                        'origin_slot': 4}
-            }
-            return link
-        }
-    });
-
 }
 function addVAEInputToggle(nodeType, nodeData) {
-    delete nodeData.input.optional["latents"]
     chainCallback(nodeType.prototype, "onConnectionsChange", function(contype, slot, iscon, linf) {
         if (contype == LiteGraph.INPUT && slot == 3 && this.inputs[3].type == "VAE") {
             if (iscon && linf) {
@@ -272,16 +525,26 @@ function addVAEInputToggle(nodeType, nodeData) {
             }
         }
     });
-    chainCallback(nodeType.prototype, "onNodeCreated", function(contype, slot, iscon, linf) {
-        this.original_getInputLink = this.getInputLink
-        this.getInputLink = function(slot) {
-            let link = this.original_getInputLink(slot)
-            if (slot == 0 && this.inputs[0].type=="LATENT") {
-                return {'origin_id': link.origin_id,
-                        'origin_slot': link.origin_slot,
-                        'target_slot': 4}
+}
+function cloneType(nodeType, nodeData) {
+    nodeData.output[0] = "VHS_DUMMY_NONE"
+    chainCallback(nodeType.prototype, "onConnectionsChange", function(contype, slot, iscon, linf) {
+        if (contype == LiteGraph.INPUT && slot == 0) {
+            let new_type = "VHS_DUMMY_NONE"
+            if (iscon && linf) {
+                new_type = app.graph.getNodeById(linf.origin_id).outputs[linf.origin_slot].type
             }
-            return link
+            if (this.linkTimeout) {
+                clearTimeout(this.linkTimeout)
+                this.linkTimeout = false
+            }
+            this.linkTimeout = setTimeout(() => {
+                if (this.outputs[0].type != new_type) {
+                    this.outputs[0].type = new_type
+                    this.disconnectOutput(0);
+                }
+                this.linkTimeout = false
+            }, 50)
         }
     });
 }
@@ -401,7 +664,7 @@ function addUploadWidget(nodeType, nodeData, widgetName, type="video") {
                     }
                     let successes = 0;
                     for(const file of fileInput.files) {
-                        if (await uploadFile(file) == 200) {
+                        if ((await uploadFile(file)).status == 200) {
                             successes++;
                         } else {
                             //Upload failed, but some prior uploads may have succeeded
@@ -428,11 +691,12 @@ function addUploadWidget(nodeType, nodeData, widgetName, type="video") {
                 style: "display: none",
                 onchange: async () => {
                     if (fileInput.files.length) {
-                        if (await uploadFile(fileInput.files[0]) != 200) {
+                        let resp = await uploadFile(fileInput.files[0])
+                        if (resp.status != 200) {
                             //upload failed and file can not be added to options
                             return;
                         }
-                        const filename = fileInput.files[0].name;
+                        const filename = (await resp.json()).name;
                         pathWidget.options.values.push(filename);
                         pathWidget.value = filename;
                         if (pathWidget.callback) {
@@ -448,11 +712,12 @@ function addUploadWidget(nodeType, nodeData, widgetName, type="video") {
                 style: "display: none",
                 onchange: async () => {
                     if (fileInput.files.length) {
-                        if (await uploadFile(fileInput.files[0]) != 200) {
+                        let resp = await uploadFile(fileInput.files[0])
+                        if (resp.status != 200) {
                             //upload failed and file can not be added to options
                             return;
                         }
-                        const filename = fileInput.files[0].name;
+                        const filename = (await resp.json()).name;
                         pathWidget.options.values.push(filename);
                         pathWidget.value = filename;
                         if (pathWidget.callback) {
@@ -512,7 +777,8 @@ function addVideoPreview(nodeType) {
             e.preventDefault()
             return app.canvas._mousewheel_callback(e)
         }, true);
-        previewWidget.value = {hidden: false, paused: false, params: {}}
+        previewWidget.value = {hidden: false, paused: false, params: {},
+            muted: app.ui.settings.getSettingValue("VHS.DefaultMute", false)}
         previewWidget.parentEl = document.createElement("div");
         previewWidget.parentEl.className = "vhs_preview";
         previewWidget.parentEl.style['width'] = "100%"
@@ -533,7 +799,7 @@ function addVideoPreview(nodeType) {
             fitHeight(this);
         });
         previewWidget.videoEl.onmouseenter =  () => {
-            previewWidget.videoEl.muted = false;
+            previewWidget.videoEl.muted = previewWidget.value.muted
         };
         previewWidget.videoEl.onmouseleave = () => {
             previewWidget.videoEl.muted = true;
@@ -691,6 +957,10 @@ function addPreviewOptions(nodeType) {
                 }
             }
         }});
+        const muteDesc = (previewWidget.value.muted ? "Unmute" : "Mute") + " Preview"
+        optNew.push({content: muteDesc, callback: () => {
+            previewWidget.value.muted = !previewWidget.value.muted
+        }})
         if(options.length > 0 && options[0] != null && optNew.length > 0) {
             optNew.push(null);
         }
@@ -799,7 +1069,7 @@ function addLoadVideoCommon(nodeType, nodeData) {
         let update = function (value, _, node) {
             let param = {}
             param[this.name] = value
-            node.updateParameters(param);
+            node?.updateParameters(param);
         }
         chainCallback(frameCapWidget, "callback", update);
         chainCallback(frameSkipWidget, "callback", update);
@@ -808,7 +1078,7 @@ function addLoadVideoCommon(nodeType, nodeData) {
         let priorSize = sizeWidget.value;
         let updateSize = function(value, _, node) {
             if (sizeWidget.value == 'Custom' || priorSize != sizeWidget.value) {
-                node.updateParameters({"force_size": sizeWidget.serializePreview()});
+                node?.updateParameters({"force_size": sizeWidget.serializePreview()});
             }
             priorSize = sizeWidget.value;
         }
@@ -883,7 +1153,7 @@ function searchBox(event, [x,y], node) {
 
     var timeout = null;
     let last_path = null;
-    let extensions = pathWidget.options.extensions
+    let extensions = pathWidget.options.vhs_path_extensions
 
     input.addEventListener("keydown", (e) => {
         dialog.is_modified = true;
@@ -902,8 +1172,8 @@ function searchBox(event, [x,y], node) {
                 input.value = last_path + options_element.firstChild.innerText;
                 e.preventDefault();
                 e.stopPropagation();
-            } else if (e.ctrlKey && e.keyCode == 87) {
-                //Ctrl+w
+            } else if (e.ctrlKey && (e.keyCode == 87 || e.keyCode == 66)) {
+                //Ctrl+w or Ctrl+b
                 //most browsers won't support, but it's good QOL for those that do
                 input.value = path_stem(input.value.slice(0,-1))[0]
                 e.preventDefault();
@@ -989,7 +1259,7 @@ function searchBox(event, [x,y], node) {
             if (extensions) {
                 params.extensions = extensions
             }
-            let optionsURL = api.apiURL('getpath?' + new URLSearchParams(params));
+            let optionsURL = api.apiURL('/getpath?' + new URLSearchParams(params));
             try {
                 let resp = await fetch(optionsURL);
                 options = await resp.json();
@@ -1022,12 +1292,35 @@ app.ui.settings.addSetting({
     type: "boolean",
     defaultValue: false,
 });
+app.ui.settings.addSetting({
+    id: "VHS.DefaultMute",
+    name: "🎥🅥🅗🅢 Mute videos by default",
+    type: "boolean",
+    defaultValue: false,
+});
 
 app.registerExtension({
     name: "VideoHelperSuite.Core",
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if(nodeData?.name?.startsWith("VHS_")) {
             useKVState(nodeType);
+            if (nodeData.description) {
+                let description = nodeData.description
+                let el = document.createElement("div")
+                el.innerHTML = description
+                if (!el.children.length) {
+                    //Is plaintext. Do minor convenience formatting
+                    let chunks = description.split('\n')
+                    nodeData.description = chunks[0]
+                    description = chunks.join('<br>')
+                } else {
+                    nodeData.description = el.querySelector('#VHS_shortdesc')?.innerHTML || el.children[1]?.firstChild?.innerHTML
+                }
+                chainCallback(nodeType.prototype, "onNodeCreated", function () {
+                    helpDOM.addHelp(this, nodeType, description)
+                    this.setSize(this.computeSize())
+                })
+            }
             chainCallback(nodeType.prototype, "onNodeCreated", function () {
                 let new_widgets = []
                 if (this.widgets) {
@@ -1113,7 +1406,7 @@ app.registerExtension({
                     }
                     format += "/" + extension;
                     let params = {filename : value, type: "path", format: format};
-                    this.updateParameters(params, true);
+                    this?.updateParameters(params, true);
                 });
             });
             addLoadVideoCommon(nodeType, nodeData);
@@ -1131,8 +1424,6 @@ app.registerExtension({
             addFormatWidgets(nodeType);
             addVAEInputToggle(nodeType, nodeData)
 
-            //Hide the information passing 'gif' output
-            //TODO: check how this is implemented for save image
             chainCallback(nodeType.prototype, "onNodeCreated", function() {
                 this._outputs = this.outputs
                 Object.defineProperty(this, "outputs", {
@@ -1161,6 +1452,8 @@ app.registerExtension({
                     computeSize: () => {return [0,-4]},
                     afterQueued: function() {this.value++;}});
             });
+        } else if (nodeData?.name == "VHS_Unbatch") {
+            cloneType(nodeType, nodeData)
         }
     },
     async getCustomWidgets() {
@@ -1199,9 +1492,9 @@ app.registerExtension({
                             if (label != null) {
                                 ctx.fillText(label, margin * 2, y + H * 0.7);
                             }
-                            ctx.fillStyle = text_color;
+                            ctx.fillStyle = this.value ? text_color : '#777';
                             ctx.textAlign = "right";
-                            let disp_text = this.format_path(String(this.value))
+                            let disp_text = this.format_path(String(this.value || this.options.placeholder))
                             ctx.fillText(disp_text, widget_width - margin * 2, y + H * 0.7); //30 chars max
                             ctx.restore();
                         }
@@ -1231,9 +1524,7 @@ app.registerExtension({
                     }
                 };
                 if (inputData.length > 1) {
-                    if (inputData[1].vhs_path_extensions) {
-                        w.options.extensions = inputData[1].vhs_path_extensions;
-                    }
+                    w.options = inputData[1]
                     if (inputData[1].default) {
                         w.value = inputData[1].default;
                     }
@@ -1256,6 +1547,11 @@ app.registerExtension({
             }
         }
     },
+    async beforeConfigureGraph(graphData, missingNodeTypes) {
+        if(helpDOM?.node) {
+            helpDOM.node = undefined
+        }
+    },
     async setup() {
         //cg-use-everywhere link workaround
         //particularly invasive, plan to remove
@@ -1272,5 +1568,22 @@ app.registerExtension({
             return res
         }
         app.graphToPrompt = graphToPrompt
-    }
+    },
+    async init() {
+        if (app.VHSHelp != helpDOM) {
+            helpDOM = app.VHSHelp
+        } else {
+            initHelpDOM()
+        }
+        let e = app.extensions.filter((w) => w.name == 'UVR5.AudioPreviewer')
+        if (e.length) {
+            let orig = e[0].beforeRegisterNodeDef
+            e[0].beforeRegisterNodeDef = function(nodeType, nodeData, app) {
+                if(!nodeData?.name?.startsWith("VHS_")) {
+                    return orig.apply(this, arguments);
+                }
+            }
+        }
+
+    },
 });

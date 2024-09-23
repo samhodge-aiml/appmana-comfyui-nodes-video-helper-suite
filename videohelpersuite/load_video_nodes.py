@@ -9,10 +9,11 @@ import psutil
 from comfy.cmd import folder_paths
 from comfy.utils import common_upscale, ProgressBar
 from .logger import logger
-from .utils import BIGMAX, DIMMAX, calculate_file_hash, get_sorted_dir_files_from_directory, lazy_get_audio, hash_path, validate_path, strip_path
+from .utils import BIGMAX, DIMMAX, calculate_file_hash, get_sorted_dir_files_from_directory,\
+        lazy_get_audio, hash_path, validate_path, strip_path, try_download_video, is_url, imageOrLatent
 
 
-video_extensions = ['webm', 'mp4', 'mkv', 'gif']
+video_extensions = ['webm', 'mp4', 'mkv', 'gif', 'mov']
 
 
 def is_gif(filename) -> bool:
@@ -41,7 +42,6 @@ def cv_frame_generator(video, force_rate, frame_load_cap, skip_first_frames,
     video_cap = cv2.VideoCapture(strip_path(video))
     if not video_cap.isOpened():
         raise ValueError(f"{video} could not be loaded with cv.")
-    pbar = ProgressBar(frame_load_cap) if frame_load_cap > 0 else None
 
     # extract video metadata
     fps = video_cap.get(cv2.CAP_PROP_FPS)
@@ -63,9 +63,18 @@ def cv_frame_generator(video, force_rate, frame_load_cap, skip_first_frames,
         target_frame_time = 1/force_rate
 
     yield (width, height, fps, duration, total_frames, target_frame_time)
+    if total_frames > 0:
+        if force_rate != 0:
+            yieldable_frames = int(total_frames / fps * force_rate)
+        else:
+            yieldable_frames = total_frames
+        if frame_load_cap != 0:
+            yieldable_frames =  min(frame_load_cap, yieldable_frames)
+    else:
+        yieldable_frames = 0
+    pbar = ProgressBar(yieldable_frames)
     if meta_batch is not None:
-        yield min(frame_load_cap, total_frames)
-
+        yield yieldable_frames
     time_offset=target_frame_time - base_frame_time
     while video_cap.isOpened():
         if time_offset < target_frame_time:
@@ -105,7 +114,7 @@ def cv_frame_generator(video, force_rate, frame_load_cap, skip_first_frames,
         prev_frame = frame
         frames_added += 1
         if pbar is not None:
-            pbar.update_absolute(frames_added, frame_load_cap)
+            pbar.update_absolute(frames_added, yieldable_frames)
         # if cap exists and we've reached it, stop processing frames
         if frame_load_cap > 0 and frames_added >= frame_load_cap:
             break
@@ -135,7 +144,9 @@ def load_video_cv(video: str, force_rate: int, force_size: str,
 
         if meta_batch is not None:
             meta_batch.inputs[unique_id] = (gen, width, height, fps, duration, total_frames, target_frame_time)
-            meta_batch.total_frames = min(meta_batch.total_frames, next(gen))
+            yieldable_frames = next(gen)
+            if yieldable_frames:
+                meta_batch.total_frames = min(meta_batch.total_frames, yieldable_frames)
 
     else:
         (gen, width, height, fps, duration, total_frames, target_frame_time) = meta_batch.inputs[unique_id]
@@ -181,7 +192,8 @@ def load_video_cv(video: str, force_rate: int, force_size: str,
     if vae is not None:
         gen = batched_vae_encode(gen, vae, frames_per_batch)
         vw,vh = new_size[0]//downscale_ratio, new_size[1]//downscale_ratio
-        images = torch.from_numpy(np.fromiter(gen, np.dtype((np.float32, (4,vh,vw)))))
+        channels = getattr(vae, 'latent_channels', 4)
+        images = torch.from_numpy(np.fromiter(gen, np.dtype((np.float32, (channels,vh,vw)))))
     else:
         #Some minor wizardry to eliminate a copy and reduce max memory by a factor of ~2
         images = torch.from_numpy(np.fromiter(gen, np.dtype((np.float32, (new_size[1], new_size[0], 3)))))
@@ -212,9 +224,9 @@ def load_video_cv(video: str, force_rate: int, force_size: str,
         "loaded_height": new_size[1],
     }
     if vae is None:
-        return (images, len(images), audio, video_info, None)
+        return (images, len(images), audio, video_info)
     else:
-        return (None, len(images), audio, video_info, {"samples": images})
+        return ({"samples": images}, len(images), audio, video_info)
 
 
 
@@ -226,7 +238,7 @@ class LoadVideoUpload:
         for f in os.listdir(input_dir):
             if os.path.isfile(os.path.join(input_dir, f)):
                 file_parts = f.split('.')
-                if len(file_parts) > 1 and (file_parts[-1] in video_extensions):
+                if len(file_parts) > 1 and (file_parts[-1].lower() in video_extensions):
                     files.append(f)
         return {"required": {
                     "video": (sorted(files),),
@@ -249,8 +261,8 @@ class LoadVideoUpload:
 
     CATEGORY = "Video Helper Suite 🎥🅥🅗🅢"
 
-    RETURN_TYPES = ("IMAGE", "INT", "AUDIO", "VHS_VIDEOINFO", "LATENT")
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "LATENT")
+    RETURN_TYPES = (imageOrLatent, "INT", "AUDIO", "VHS_VIDEOINFO")
+    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info")
 
     FUNCTION = "load_video"
 
@@ -275,7 +287,7 @@ class LoadVideoPath:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "video": ("STRING", {"default": "X://insert/path/here.mp4", "vhs_path_extensions": video_extensions}),
+                "video": ("STRING", {"placeholder": "X://insert/path/here.mp4", "vhs_path_extensions": video_extensions}),
                 "force_rate": ("INT", {"default": 0, "min": 0, "max": 60, "step": 1}),
                  "force_size": (["Disabled", "Custom Height", "Custom Width", "Custom", "256x?", "?x256", "256x256", "512x?", "?x512", "512x512"],),
                  "custom_width": ("INT", {"default": 512, "min": 0, "max": DIMMAX, "step": 8}),
@@ -295,14 +307,16 @@ class LoadVideoPath:
 
     CATEGORY = "Video Helper Suite 🎥🅥🅗🅢"
 
-    RETURN_TYPES = ("IMAGE", "INT", "AUDIO", "VHS_VIDEOINFO", "LATENT")
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info", "LATENT")
+    RETURN_TYPES = (imageOrLatent, "INT", "AUDIO", "VHS_VIDEOINFO")
+    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info")
 
     FUNCTION = "load_video"
 
     def load_video(self, **kwargs):
         if kwargs['video'] is None or validate_path(kwargs['video']) != True:
             raise Exception("video is not a valid path: " + kwargs['video'])
+        if is_url(kwargs['video']):
+            kwargs['video'] = try_download_video(kwargs['video']) or kwargs['video']
         return load_video_cv(**kwargs)
 
     @classmethod
