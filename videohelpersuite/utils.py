@@ -12,10 +12,9 @@ from typing import Union
 import torch
 from torch import Tensor
 
-from comfy.cmd import server
+from comfy.cmd import server, folder_paths
 from comfy.execution_context import current_execution_context
 from .logger import logger
-import folder_paths
 
 BIGMIN = -(2 ** 53 - 1)
 BIGMAX = (2 ** 53 - 1)
