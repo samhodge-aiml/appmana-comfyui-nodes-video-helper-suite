@@ -32,7 +32,7 @@ packages = [
 [tool.setuptools.package-dir]
 "comfyui_video_helper_suite" = "."
 "comfyui_video_helper_suite.videohelpersuite" = "videohelpersuite"
-"comfyui_video_helper_suite.videohelpersuite.video_formats" = "videohelpersuite.video_formats"
+"comfyui_video_helper_suite.videohelpersuite.video_formats" = "videohelpersuite/video_formats"
 
 [tool.setuptools.package-data]
 "*" = ["**/*.js", "**/*.json"]
