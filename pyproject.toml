@@ -23,11 +23,19 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["comfyui_video_helper_suite"]
-package-dir = { "comfyui_video_helper_suite" = "." }
+packages = [
+    "comfyui_video_helper_suite",
+    "comfyui_video_helper_suite.videohelpersuite",
+    "comfyui_video_helper_suite.videohelpersuite.video_formats"
+]
 
-[tool.setuptools.dynamic]
-dependencies = { file = ["requirements.txt"] }
+[tool.setuptools.package-dir]
+"comfyui_video_helper_suite" = "."
+"comfyui_video_helper_suite.videohelpersuite" = "videohelpersuite"
+"comfyui_video_helper_suite.videohelpersuite.video_formats" = "videohelpersuite.video_formats"
+
+[tool.setuptools.package-data]
+"*" = ["**/*.js", "**/*.json"]
 
 [project.entry-points."comfyui.custom_nodes"]
 comfyui_video_helper_suite = "comfyui_video_helper_suite.videohelpersuite.nodes"
