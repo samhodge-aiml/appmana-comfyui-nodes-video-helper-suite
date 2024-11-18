@@ -16,10 +16,11 @@ from . import documentation
 from .batched_nodes import VAEEncodeBatched, VAEDecodeBatched
 from .image_latent_nodes import *
 from .load_images_nodes import LoadImagesFromDirectoryUpload, LoadImagesFromDirectoryPath
-from .load_video_nodes import LoadVideoUpload, LoadVideoPath
+from .load_video_nodes import LoadVideoUpload, LoadVideoPath, LoadVideoFFmpegUpload, LoadVideoFFmpegPath, LoadImagePath
 from .logger import logger
 from .server import *
-from .utils import ffmpeg_path, get_audio, hash_path, validate_path, requeue_workflow, gifski_path, strip_path, try_download_video, is_url, imageOrLatent
+from .utils import ffmpeg_path, get_audio, hash_path, validate_path, requeue_workflow, gifski_path, strip_path, \
+    try_download_video, is_url, imageOrLatent
 
 VHS_VIDEO_FORMATS_FOLDER_NAME = "VHS_video_formats"
 folder_paths.add_model_folder_path(VHS_VIDEO_FORMATS_FOLDER_NAME, extensions={".json"})
@@ -773,7 +774,8 @@ class PruneOutputs:
         if options in ["All"]:
             delete_list.append(filenames[1][-1])
 
-        output_dirs = [os.path.abspath("output"), os.path.abspath("temp")]
+        output_dirs = [folder_paths.get_output_directory(),
+                       folder_paths.get_temp_directory()]
         for file in delete_list:
             # Check that path is actually an output directory
             if (os.path.commonpath([output_dirs[0], file]) != output_dirs[0]) \
@@ -819,7 +821,7 @@ class BatchManager:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "frames_per_batch": ("INT", {"default": 16, "min": 1, "max": 128, "step": 1})
+                "frames_per_batch": ("INT", {"default": 16, "min": 1, "max": BIGMAX, "step": 1})
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -1000,6 +1002,9 @@ NODE_CLASS_MAPPINGS = {
     "VHS_VideoCombine": VideoCombine,
     "VHS_LoadVideo": LoadVideoUpload,
     "VHS_LoadVideoPath": LoadVideoPath,
+    "VHS_LoadVideoFFmpeg": LoadVideoFFmpegUpload,
+    "VHS_LoadVideoFFmpegPath": LoadVideoFFmpegPath,
+    "VHS_LoadImagePath": LoadImagePath,
     "VHS_LoadImages": LoadImagesFromDirectoryUpload,
     "VHS_LoadImagesPath": LoadImagesFromDirectoryPath,
     "VHS_LoadAudio": LoadAudio,
@@ -1040,6 +1045,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VHS_VideoCombine": "Video Combine 🎥🅥🅗🅢",
     "VHS_LoadVideo": "Load Video (Upload) 🎥🅥🅗🅢",
     "VHS_LoadVideoPath": "Load Video (Path) 🎥🅥🅗🅢",
+    "VHS_LoadVideoFFmpeg": "Load Video FFmpeg (Upload) 🎥🅥🅗🅢",
+    "VHS_LoadVideoFFmpegPath": "Load Video FFmpeg (Path) 🎥🅥🅗🅢",
+    "VHS_LoadImagePath": "Load Image (Path) 🎥🅥🅗🅢",
     "VHS_LoadImages": "Load Images (Upload) 🎥🅥🅗🅢",
     "VHS_LoadImagesPath": "Load Images (Path) 🎥🅥🅗🅢",
     "VHS_LoadAudio": "Load Audio (Path)🎥🅥🅗🅢",

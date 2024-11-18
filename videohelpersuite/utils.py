@@ -265,7 +265,7 @@ class LazyAudioMap(Mapping):
         return len(self._dict)
 
 
-def lazy_get_audio(file, start_time=0, duration=0):
+def lazy_get_audio(file, start_time=0, duration=0, **kwargs):
     return LazyAudioMap(file, start_time, duration)
 
 
